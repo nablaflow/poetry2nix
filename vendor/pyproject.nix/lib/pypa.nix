@@ -15,8 +15,15 @@ let
     length
     sort
     head
+    elem
     ;
-  inherit (lib) isString toLower;
+  inherit (lib)
+    isString
+    toLower
+    concatStrings
+    take
+    splitString
+    ;
   inherit (lib.strings) hasPrefix toInt;
 
   matchWheelFileName = match "([^-]+)-([^-]+)(-([[:digit:]][^-]*))?-([^-]+)-([^-]+)-(.+).whl";
@@ -39,14 +46,18 @@ let
 
 in
 lib.fix (self: {
-  /*
+  /**
     Normalize package name as documented in https://packaging.python.org/en/latest/specifications/name-normalization/#normalization
 
-    Type: normalizePackageName :: string -> string
+    # Type:
+    `string -> string`
 
-    Example:
-      # readPyproject "Friendly-Bard"
-      "friendly-bard"
+    # Example
+    ```nix
+    readPyproject "Friendly-Bard"
+    ->
+    "friendly-bard"
+    ```
   */
   normalizePackageName =
     let
@@ -55,19 +66,22 @@ lib.fix (self: {
     in
     name: toLower (concatDash (filter isString (splitSep name)));
 
-  /*
+  /**
     Parse Python tags.
 
     As described in https://packaging.python.org/en/latest/specifications/platform-compatibility-tags/#python-tag.
 
     Type: parsePythonTag :: string -> AttrSet
 
-    Example:
-    # parsePythonTag "cp37"
+    # Example
+    ```nix
+    parsePythonTag "cp37"
+    ->
     {
       implementation = "cpython";
       version = "37";
     }
+    ```
   */
   parsePythonTag =
     tag:
@@ -80,50 +94,41 @@ lib.fix (self: {
       version = optionalString (elemAt m 1);
     };
 
-  /*
+  /**
     Parse ABI tags.
 
     As described in https://packaging.python.org/en/latest/specifications/platform-compatibility-tags/#python-tag.
 
-    Type: parseABITag :: string -> AttrSet
-
-    Example:
-    # parseABITag "cp37dmu"
-    {
-      rest = "dmu";
-      implementation = "cp";
-      version = "37";
-    }
+    # Type
+    `string -> AttrSet`
+    ```
   */
-  parseABITag =
-    tag:
-    let
-      m = match "([a-z]+)([0-9]*)_?([a-z0-9]*)" tag;
-    in
-    assert m != null;
-    {
-      implementation = normalizeImpl (elemAt m 0);
-      version = optionalString (elemAt m 1);
-      rest = elemAt m 2;
-    };
+  parseABITag = tag: {
+    inherit tag; # Verbatim tag
+  };
 
-  /*
+  /**
     Check whether string is a sdist file or not.
 
-    Type: isSdistFileName :: string -> bool
+    # Type
+    `string -> bool`
 
-    Example:
-    # isSdistFileName "cryptography-41.0.1.tar.gz"
+    # Example:
+    ```nix
+    isSdistFileName "cryptography-41.0.1.tar.gz"
+    ->
     true
+    ```
   */
   isSdistFileName =
     # The filename string
     name: matchSdistFileName name != null;
 
-  /*
+  /**
     Regex match a wheel file name, returning a list of match groups. Returns null if no match.
 
-    Type: matchWheelFileName :: string -> [ string ]
+    # Type
+    `string -> [ string ]`
   */
   matchWheelFileName =
     name:
@@ -132,26 +137,33 @@ lib.fix (self: {
     in
     if m != null then filter isString m else null;
 
-  /*
+  /**
     Check whether string is a wheel file or not.
 
-    Type: isWheelFileName :: string -> bool
+    # Type
+    `string -> bool`
 
-    Example:
-    # isWheelFileName "cryptography-41.0.1-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+    # Example:
+    ```
+    isWheelFileName "cryptography-41.0.1-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+    ->
     true
+    ```
   */
   isWheelFileName =
     # The filename string
     name: matchWheelFileName name != null;
 
-  /*
+  /**
     Parse PEP-427 wheel file names.
 
-     Type: parseFileName :: string -> AttrSet
+     # Type
+     `string -> AttrSet`
 
-     Example:
-     # parseFileName "cryptography-41.0.1-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+     # Example:
+     ```nix
+     parseFileName "cryptography-41.0.1-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+     ->
      {
       abiTag = {  # Parsed by pypa.parseABITag
         implementation = "abi";
@@ -169,6 +181,7 @@ lib.fix (self: {
       platformTags = [ "manylinux_2_17_aarch64" "manylinux2014_aarch64" ];
       version = "41.0.1";
     }
+    ```
   */
   parseWheelFileName =
     # The wheel filename is `{distribution}-{version}(-{build tag})?-{python tag}-{abi tag}-{platform tag}.whl`.
@@ -189,52 +202,67 @@ lib.fix (self: {
       filename = name;
     };
 
-  /*
+  /**
     Check whether an ABI tag is compatible with this python interpreter.
 
-    Type: isABITagCompatible :: derivation -> string -> bool
+    # Type
+    `derivation -> string -> bool`
 
-    Example:
-    # isABITagCompatible pkgs.python3 (pypa.parseABITag "cp37")
+    # Example:
+    ```nix
+    isABITagCompatible pkgs.python3 (pypa.parseABITag "cp37")
+    ->
     true
+    ```
   */
   isABITagCompatible =
     # Python interpreter derivation
     python:
-    # ABI tag string
-    abiTag:
     let
-      inherit (python.passthru) sourceVersion implementation;
-    in
-    (
-      # None is a wildcard compatible with any implementation
-      (abiTag.implementation == "none" || abiTag.implementation == "any")
-      ||
-        # implementation == sys.implementation.name
-        abiTag.implementation == implementation
-      ||
-        # The CPython stable ABI is abi3 as in the shared library suffix.
-        (abiTag.implementation == "abi" && implementation == "cpython")
-    )
-    &&
-      # Check version
-      (
-        abiTag.version == null
-        || abiTag.version == sourceVersion.major
-        || (
-          hasPrefix sourceVersion.major abiTag.version
-          && ((toInt (sourceVersion.major + sourceVersion.minor)) == toInt abiTag.version)
-        )
-      );
+      inherit (python.passthru) sourceVersion implementation pythonVersion;
 
-  /*
+      # TODO: Implement ABI tags in the nixpkgs Python derivation.
+      #
+      # This isn't strictly correct in the face of things like Python free-threading
+      # which has a `t` suffix but there is no way right now to introspect & check
+      # if the GIL is enabled or not.
+      #
+      # So a free-threaded build will erroneously be returned as compatible with
+      # regular CPython wheels.
+      abiTags =
+        if implementation == "cpython" then
+          [
+            "none"
+            "any"
+            "abi3"
+            "cp${sourceVersion.major}${sourceVersion.minor}"
+          ]
+        else if implementation == "pypy" then
+          [
+            "none"
+            "any"
+            "pypy${concatStrings (take 2 (splitString "." pythonVersion))}_pp${sourceVersion.major}${sourceVersion.minor}"
+          ]
+        else
+          [
+            "none"
+            "any"
+          ];
+    in
+    tag: elem tag.tag abiTags;
+
+  /**
     Check whether a platform tag is compatible with this python interpreter.
 
-    Type: isPlatformTagCompatible :: AttrSet -> derivation -> string -> bool
+    # Type
+    `AttrSet -> derivation -> string -> bool`
 
-    Example:
-    # isPlatformTagCompatible pkgs.python3 "manylinux2014_x86_64"
+    # Example:
+    ```nix
+    isPlatformTagCompatible pkgs.python3 "manylinux2014_x86_64"
+    ->
     true
+    ```
   */
   isPlatformTagCompatible =
     # Platform attrset (`lib.systems.elaborate "x86_64-linux"`)
@@ -268,7 +296,7 @@ lib.fix (self: {
         )
       )
     else if platformTag == "win32" then
-      (platform.isWindows && platform.is32Bit && platform.isx86)
+      (platform.isWindows && platform.is32bit && platform.isx86_32)
     else if hasPrefix "win_" platformTag then
       (
         let
@@ -293,30 +321,78 @@ lib.fix (self: {
         let
           m = match "linux_(.+)" platformTag;
           arch = elemAt m 0;
+
+          linuxArch = if platform.linuxArch == "arm64" then "aarch64" else platform.linuxArch;
         in
         assert m != null;
-        platform.isLinux && arch == platform.linuxArch
+        platform.isLinux && arch == linuxArch
       )
+    else if hasPrefix "ios" platformTag then
+      # e.g., ios_13_0_arm64_iphoneos
+      let
+        m = match "ios_([0-9]+)_([0-9]+)_(.+)_.+" platformTag;
+        major = elemAt m 0;
+        minor = elemAt m 0;
+        arch = elemAt m 2;
+      in
+      assert m != null;
+      platform.isiOS
+      && arch == platform.darwinArch
+      && compareVersions platform.darwinSdkVersion "${major}.${minor}" >= 0
+    else if hasPrefix "android" platformTag then
+      # e.g., android_32_arm64_v8a
+      let
+        m = match "android_([0-9])+_(.+)" platformTag;
+        apiLevel = elemAt m 0;
+        abi = elemAt m 1;
+      in
+      assert m != null;
+      platform.isAndroid
+      &&
+        (
+          if abi == "armeabi_v7a" then
+            "arm"
+          else if abi == "arm64_v8a" then
+            "arm64"
+          else if abi == "x86" then
+            "x86"
+          else if abi == "x86_64" then
+            "x86_64"
+          else
+            throw "Unhandled Android ABI: ${abi}"
+        ) == platform.linuxArch
+      && compareVersions platform.androidSdkVersion apiLevel >= 0
     else
-      throw "Unknown platform tag: '${platformTag}'";
+      false;
 
-  /*
+  /**
     Check whether a Python language tag is compatible with this Python interpreter.
 
-    Type: isPythonTagCompatible :: derivation -> AttrSet -> bool
+    # Type
+    `derivation -> AttrSet -> bool`
 
-    Example:
-    # isPythonTagCompatible pkgs.python3 (pypa.parsePythonTag "py3")
+    # Example:
+    ```nix
+    isPythonTagCompatible pkgs.python3 (pypa.parsePythonTag "py3")
+    ->
     true
+    ```
   */
   isPythonTagCompatible =
     # Python interpreter derivation
     python:
+    let
+      #   inherit (python.passthru) sourceVersion implementation;
+      # in
+      inherit (python.passthru) implementation pythonVersion;
+
+      version' = splitString "." pythonVersion;
+      major = elemAt version' 0;
+      minor = elemAt version' 1;
+    in
+    assert length version' >= 2;
     # Python tag
     pythonTag:
-    let
-      inherit (python.passthru) sourceVersion implementation;
-    in
     (
       # Python is a wildcard compatible with any implementation
       pythonTag.implementation == "python"
@@ -326,21 +402,24 @@ lib.fix (self: {
     )
     &&
       # Check version
-      pythonTag.version == null
-    || pythonTag.version == sourceVersion.major
-    || (
-      hasPrefix sourceVersion.major pythonTag.version
-      && ((toInt (sourceVersion.major + sourceVersion.minor)) >= toInt pythonTag.version)
-    );
+      (
+        pythonTag.version == null
+        || pythonTag.version == major
+        || (hasPrefix major pythonTag.version && ((toInt (major + minor)) >= toInt pythonTag.version))
+      );
 
-  /*
+  /**
     Check whether wheel file name is compatible with this python interpreter.
 
-    Type: isWheelFileCompatible :: derivation -> AttrSet -> bool
+    # Type
+    `derivation -> AttrSet -> bool`
 
-    Example:
-    # isWheelFileCompatible pkgs.python3 (pypa.parseWheelFileName "Pillow-9.0.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl")
+    # Example:
+    ```nix
+    isWheelFileCompatible pkgs.python3 (pypa.parseWheelFileName "Pillow-9.0.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl")
+    ->
     true
+    ```
   */
   isWheelFileCompatible =
     # Platform attrset (`lib.systems.elaborate "x86_64-linux"`)
@@ -349,22 +428,29 @@ lib.fix (self: {
     libc:
     # Python interpreter derivation
     python:
+    let
+      isABITagCompatible = self.isABITagCompatible python;
+    in
     # The parsed wheel filename
     file:
     (
-      self.isABITagCompatible python file.abiTag
+      isABITagCompatible file.abiTag
       && lib.any (self.isPythonTagCompatible python) file.languageTags
       && lib.any (self.isPlatformTagCompatible platform libc) file.platformTags
     );
 
-  /*
+  /**
     Select compatible wheels from a list and return them in priority order.
 
-    Type: selectWheels :: AttrSet -> derivation -> [ AttrSet ] -> [ AttrSet ]
+    # Type
+    `AttrSet -> derivation -> [ AttrSet ] -> [ AttrSet ]`
 
-    Example:
-    # selectWheels (lib.systems.elaborate "x86_64-linux") [ (pypa.parseWheelFileName "Pillow-9.0.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl") ]
+    # Example:
+    ```nix
+    selectWheels (lib.systems.elaborate "x86_64-linux") [ (pypa.parseWheelFileName "Pillow-9.0.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl") ]
+    ->
     [ (pypa.parseWheelFileName "Pillow-9.0.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl") ]
+    ```
   */
   selectWheels =
     # Platform attrset (`lib.systems.elaborate "x86_64-linux"`)
@@ -382,14 +468,17 @@ lib.fix (self: {
       ''
     else
       let
+        isABITagCompatible = self.isABITagCompatible python;
+        isPythonTagCompatible = self.isPythonTagCompatible python;
+
         # Get sorting/filter criteria fields
         withSortedTags = map (
           file:
           let
-            abiCompatible = self.isABITagCompatible python file.abiTag;
+            abiCompatible = isABITagCompatible file.abiTag;
 
             # Filter only compatible tags
-            languageTags = filter (self.isPythonTagCompatible python) file.languageTags;
+            languageTags = filter isPythonTagCompatible file.languageTags;
             # Extract the tag as a number. E.g. "37" is `toInt "37"` and "none"/"any" is 0
             languageTags' = map (tag: if tag == "none" then 0 else toInt tag.version) languageTags;
 
